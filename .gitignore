@@ -16,6 +16,7 @@ build/
 # =========================
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+notebooks/archive/
 
 # =========================
 # Model Weights & Checkpoints
@@ -38,11 +39,13 @@ runs/
 *.csv
 *.parquet
 data/
+results/data/
 
 # =========================
 # PDFs (keep papers locally, use reading_list.md instead)
 # =========================
 papers/
+notes/papers/
 *.pdf
 
 # =========================
@@ -50,6 +53,11 @@ papers/
 # =========================
 pic1.png
 *.tmp.png
+
+# =========================
+# Local archive material
+# =========================
+notes/archive/
 
 # =========================
 # Virtual environments
