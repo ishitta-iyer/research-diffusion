@@ -51,7 +51,7 @@ notes/papers/
 # =========================
 # Images & outputs (commit only intentional result figures)
 # =========================
-pic1.png
+multiscale_figure_preview.png
 *.tmp.png
 
 # =========================

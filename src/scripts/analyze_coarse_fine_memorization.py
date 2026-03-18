@@ -42,14 +42,14 @@ if str(src_dir) not in sys.path:
 # In[ ]:
 
 
-import score_models
+import diffusion_score_models as score_models
 
 
 
 # In[ ]:
 
 
-from radial_band_utils import (
+from multiband_data_utils import (
     generate_multiband_dataset_postmask,
     add_fourier_bias_to_result,
     make_radial_band_mask,
@@ -268,4 +268,3 @@ plt.ylabel("mean(err_to_NN / err_to_random)")
 plt.title("Memorization vs wavenumber (lower = more memorized)")
 plt.legend()
 plt.show()
-
