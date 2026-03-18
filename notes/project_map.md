@@ -4,17 +4,17 @@ A breakdown of what's in this repo and how it fits together.
 
 ## Canonical Code (`src/`)
 
-- `score_models.py` — main diffusion and score model classes. Treat this as the source of truth; everything else imports from here.
+- `score_models.py` — main diffusion and score model classes. Everything else imports from here, taken from 
 - `radial_band_utils.py` — reusable helpers for Matérn field generation, radial band masking, Fourier filtering, and synthetic bias injection.
 - `scripts/radial_band_data_generator.py` — exported from the notebook of the same name; generates multiband synthetic data and inspects spectra.
 - `scripts/radial_data_mem.py` — exported from the memorization notebook; cleaner to read than the notebook version if you want the logic without the output cells.
-- `tests/test_mnist_download.py` — quick environment check for MNIST download, not really a test suite.
+- `tests/test_mnist_download.py` — environment check for MNIST download, not really a test suite.
 
 ## Notebooks (`notebooks/`)
 
-- `mnist_ddpm.ipynb` — standalone MNIST DDPM experiment, mostly a baseline.
+- `mnist_ddpm.ipynb` — standalone MNIST DDPM experiment.
 - `multiscale/` — the main experiment notebooks. This is where most of the actual work is.
-- `archive/` — older or incomplete notebooks. Kept for reference but not part of the main story.
+- `archive/` — older or incomplete notebooks. Kept for reference.
 
 ## Results (`results/`)
 
