@@ -1,41 +1,40 @@
 # Project Map
 
-This file explains what each part of the repository is for so the project is readable without reverse-engineering filenames.
+A breakdown of what's in this repo and how it fits together.
 
-## Canonical Code
+## Canonical Code (`src/`)
 
-- `src/score_models.py`: main diffusion and score-model utilities. This should be treated as the canonical copy.
-- `src/radial_band_utils.py`: reusable helpers for Matérn field generation, radial band masks, Fourier filtering, and synthetic bias injection.
-- `src/scripts/radial_band_data_generator.py`: notebook-exported script for generating multiband synthetic data and inspecting spectra.
-- `src/scripts/radial_data_mem.py`: notebook-exported script for the memorization-style analysis on biased versus unbiased multiscale data.
-- `src/tests/test_mnist_download.py`: small environment check for downloading MNIST into the repository's results folder.
+- `score_models.py` — main diffusion and score model classes. Treat this as the source of truth; everything else imports from here.
+- `radial_band_utils.py` — reusable helpers for Matérn field generation, radial band masking, Fourier filtering, and synthetic bias injection.
+- `scripts/radial_band_data_generator.py` — exported from the notebook of the same name; generates multiband synthetic data and inspects spectra.
+- `scripts/radial_data_mem.py` — exported from the memorization notebook; cleaner to read than the notebook version if you want the logic without the output cells.
+- `tests/test_mnist_download.py` — quick environment check for MNIST download, not really a test suite.
 
-## Notebooks
+## Notebooks (`notebooks/`)
 
-- `notebooks/mnist_ddpm.ipynb`: separate MNIST DDPM experiment.
-- `notebooks/multiscale/`: main multiscale diffusion notebooks. These are the most relevant experiment records for the professor to inspect.
-- `notebooks/archive/`: placeholder or incomplete notebooks that should not be treated as the main story of the project.
+- `mnist_ddpm.ipynb` — standalone MNIST DDPM experiment, mostly a baseline.
+- `multiscale/` — the main experiment notebooks. This is where most of the actual work is.
+- `archive/` — older or incomplete notebooks. Kept for reference but not part of the main story.
 
-## Results
+## Results (`results/`)
 
-- `results/data/multiscale_unbiased_vs_biased.pt`: saved dataset artifact used by later experiments.
-- `results/figures/`: exported figures and PDFs generated during experimentation.
+- `data/` — saved dataset artifacts (e.g. the biased vs unbiased `.pt` files used across experiments).
+- `figures/` — exported plots and PDFs from the experiments.
 
-## Notes
+## Notes (`notes/`)
 
-- `notes/papers/`: background reading PDFs kept locally and ignored from Git.
-- `notes/archive/`: local-only archive material kept for recovery, not for GitHub.
+- `papers/` — background reading, kept locally and gitignored.
+- `archive/` — local recovery material, also not pushed.
 
 ## Suggested Reading Order
 
-1. Read `src/score_models.py` to understand the diffusion model classes.
-2. Read `src/radial_band_utils.py` to understand how the synthetic multiscale data is generated.
-3. Inspect `src/scripts/radial_data_mem.py` for the clearest Python version of the memorization analysis.
-4. Use `notebooks/multiscale/multiscale_data_generator_v1.ipynb` and `notebooks/multiscale/radial_data_mem.ipynb` as the main experiment notebooks.
-5. Look at `results/figures/` and `results/data/` for outputs produced by those experiments.
+1. `src/score_models.py` — understand the model classes first
+2. `src/radial_band_utils.py` — then how the synthetic data is built
+3. `src/scripts/radial_data_mem.py` — cleanest version of the memorization analysis
+4. `notebooks/multiscale/multiscale_data_generator_v1.ipynb` and `radial_data_mem.ipynb` — the actual experiments with outputs
+5. `results/figures/` — what came out of those runs
 
-## What To Ignore First
+## What to skip
 
-- `notes/archive/`: local recovery material only. Do not push it.
-- `notebooks/archive/`: incomplete or placeholder notebooks.
-- hidden folders like `.venv/`, `__pycache__/`, and `.git/`: environment and tooling only.
+- `notes/archive/` and `notebooks/archive/` — not relevant to the current work
+- `__pycache__/`, `.venv/`, `.git/` — tooling, ignore these

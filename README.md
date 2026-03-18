@@ -1,18 +1,18 @@
 # research-diffusion
 
-This repository is organized into four review-friendly areas:
+Research on multiscale diffusion models, focusing on biased vs unbiased data generation, score-based models, and memorization analysis on radial band data.
+Best entry points:
 
-- `src/`: canonical Python code and exported analysis scripts
-- `notebooks/`: exploratory and experiment notebooks
-- `results/`: generated datasets and figures
-- `notes/`: papers, archive material, and the project file map
+src/score_models.py — main diffusion utilities
+src/radial_band_utils.py — helpers for Matérn fields, radial band masks, Fourier filtering
+src/scripts/radial_data_mem.py — cleanest version of the memorization analysis
+notebooks/multiscale/multiscale_data_generator_v1.ipynb — main experiment notebook
+notes/project_map.md — full breakdown of what lives where and why
 
-If someone is reading the project for the first time, the best entry points are:
+# Structure
+src/          canonical Python code
+notebooks/    experiment notebooks
+results/      figures and saved datasets
+notes/        project map and reading notes
 
-1. `src/score_models.py`
-2. `src/radial_band_utils.py`
-3. `src/scripts/radial_data_mem.py`
-4. `notebooks/multiscale/multiscale_data_generator_v1.ipynb`
-5. `notes/project_map.md`
-
-The original mixed workspace was preserved locally as an ignored archive, but it is not intended to be pushed to GitHub.
+See notes/project_map.md for a full walkthrough.
