@@ -1,0 +1,75 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# =========================
+# Jupyter Notebooks
+# =========================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# =========================
+# Model Weights & Checkpoints
+# =========================
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+checkpoints/
+runs/
+
+# =========================
+# Data files (generate these locally, don't commit raw data)
+# =========================
+*.npy
+*.npz
+*.hdf5
+*.h5
+*.csv
+*.parquet
+data/
+
+# =========================
+# PDFs (keep papers locally, use reading_list.md instead)
+# =========================
+papers/
+*.pdf
+
+# =========================
+# Images & outputs (commit only intentional result figures)
+# =========================
+pic1.png
+*.tmp.png
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+.env
+
+# =========================
+# macOS junk
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# =========================
+# IDEs
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
