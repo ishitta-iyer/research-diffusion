@@ -172,6 +172,29 @@ class VE(DiffusionModel):
         """
         return self.sigma**t
 
+class VE_EDM(DiffusionModel):
+    """Variance-Exploding diffusion for EDM (Karras et al. 2022).
+    Maps t in [eps, T] to sigma via geometric interpolation."""
+
+    def __init__(self, sigma_min=0.002, sigma_max=80.0):
+        super().__init__()
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
+    def drift(self, x, t):
+        return torch.zeros_like(x)
+
+    def marginal_prob_mean(self, t):
+        return torch.ones_like(t)
+
+    def marginal_prob_std(self, t):
+        return self.sigma_min * (self.sigma_max / self.sigma_min) ** t
+
+    def diffusion_coeff(self, t):
+        sigma = self.marginal_prob_std(t)
+        return sigma * torch.sqrt(2 * torch.log(torch.tensor(self.sigma_max / self.sigma_min)))
+
+
 class GMM_score(nn.Module):
     '''
         GMM score function which corresponds to the stationary point of the denoising score-matching loss function
