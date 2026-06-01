@@ -126,11 +126,18 @@ def edm_sigma_schedule(n_steps, sigma_min=0.002, sigma_max=80.0, rho=7.0):
 def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
               base_channels=16, emb_dim=64, sigma_data=None,
               lr=1e-3, batch_size=8, P_mean=-1.2, P_std=1.2,
+              c_tikhonov=0.0,
               seed=0, device="cpu", UNetClass=None):
     """
     Train a UNet with EDM preconditioning via denoising score matching.
 
-    Loss: weight(sigma) * || D_theta(x + sigma*noise; sigma) - x ||^2
+    Loss: weight(sigma) * [ || D_theta(x_noisy; sigma) - x_0 ||^2
+          + c_tikhonov * || (D_theta - x_noisy) ||^2 / sigma^2 ]
+
+    The second term is a Tikhonov penalty designed so the stationary point
+    matches the GMM closed-form Tikhonov score s* = s_true / (1 + c/sigma^2),
+    i.e. the denominator changes from sigma^2 to sigma^2 + c.
+    Ref: "Memorization and Regularization in GDM" (Baptista et al. 2025).
 
     Args:
         train_data_flat: (n_train, N*N) flattened training images
@@ -140,6 +147,7 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
         UNetClass: the raw UNet class (e.g. SmallUNet). Must accept
                    (base_channels, emb_dim) and forward(x, t).
         sigma_data: data std. If None, estimated from training data.
+        c_tikhonov: Tikhonov constant (0.0 = standard EDM, >0 = regularized).
 
     Returns:
         dict {step -> EDMPrecond (eval mode, on device)}
@@ -174,10 +182,20 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
         # Forward pass
         D_theta = precond(x_noisy, sigma)  # (B, 1, N, N)
 
-        # Weighted MSE loss
+        # Weighted denoising loss: weight(sigma) * ||D_theta - x_0||^2
         weight = edm_loss_weight(sigma, sigma_data)  # (B,)
         loss_per_sample = ((D_theta - x0) ** 2).mean(dim=(1, 2, 3))  # (B,)
         loss = (weight * loss_per_sample).mean()
+
+        # Tikhonov penalty matching GMM Tikhonov (Baptista et al. 2025):
+        # The GMM closed-form Tikhonov replaces the score denominator σ² with σ²+c,
+        # giving s* = s_true / (1 + c/σ²).  The denoising term is λ(σ)||D−x₀||²,
+        # so the penalty must also carry λ(σ) for it to cancel in the stationary
+        # condition:  λ(D−x₀) + c·λ(D−x)/σ² = 0  →  s* = s_true/(1+c/σ²).
+        if c_tikhonov > 0.0:
+            s2 = sigma[:, None, None, None] ** 2
+            score_penalty = ((D_theta - x_noisy) ** 2 / s2).mean(dim=(1, 2, 3))
+            loss = loss + c_tikhonov * (weight * score_penalty).mean()
 
         opt.zero_grad()
         loss.backward()
