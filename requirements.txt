@@ -1,0 +1,9 @@
+torch
+numpy
+scipy
+matplotlib
+seaborn
+wandb
+pillow
+deepinv
+jupyter

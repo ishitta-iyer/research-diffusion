@@ -60,6 +60,17 @@ multiscale_figure_preview.png
 notes/archive/
 
 # =========================
+# Local-only working notes (not part of the public paper repo)
+# =========================
+CLAUDE.md
+docs/
+
+# =========================
+# Paper draft (local + Overleaf only; protects review anonymity)
+# =========================
+paper/
+
+# =========================
 # Virtual environments
 # =========================
 .venv/
