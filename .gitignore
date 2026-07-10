@@ -69,6 +69,7 @@ docs/
 # Paper draft (local + Overleaf only; protects review anonymity)
 # =========================
 paper/
+paper_overleaf.zip
 
 # =========================
 # Virtual environments
