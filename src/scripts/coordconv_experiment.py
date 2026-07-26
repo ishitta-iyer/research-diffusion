@@ -6,47 +6,23 @@ If memorization appears only with coordinates, the architectural inductive-bias
 explanation for the null result is demonstrated constructively.
 """
 import sys, os, math, time
+from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-sys.path.insert(0, "/Users/ishittaiyer/Desktop/Research/src")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 import diffusion_score_models as score_models
 from multiband_data_utils import (generate_multiband_dataset_postmask, make_radial_band_mask,
                                   radial_bandpass, make_radial_k_grid)
 from edm import EDMPrecond, EDMScoreWrapper, train_edm
+from unet import SinusoidalEmbedding, ResBlock
 
+DATA_DIR = REPO_ROOT / "results" / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 device = "cpu"
 torch.manual_seed(0)
-
-# ── UNet blocks (identical to the notebooks) ────────────────────────────────
-class SinusoidalEmbedding(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-    def forward(self, t):
-        half = self.dim // 2
-        freqs = torch.exp(-math.log(10000) * torch.arange(half, dtype=torch.float32, device=t.device) / (half - 1))
-        args = t.float()[:, None] * freqs[None]
-        return torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
-
-class ResBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, emb_dim):
-        super().__init__()
-        def ngroups(ch):
-            for g in [8, 4, 2, 1]:
-                if ch % g == 0: return g
-        self.norm1 = nn.GroupNorm(ngroups(in_ch), in_ch)
-        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-        self.norm2 = nn.GroupNorm(ngroups(out_ch), out_ch)
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.emb_proj = nn.Linear(emb_dim, out_ch)
-        self.skip = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
-    def forward(self, x, emb):
-        h = self.conv1(F.silu(self.norm1(x)))
-        h = h + self.emb_proj(F.silu(emb))[:, :, None, None]
-        h = self.conv2(F.silu(self.norm2(h)))
-        return h + self.skip(x)
 
 class CoordSmallUNet(nn.Module):
     """SmallUNet + two coordinate channels at the input (CoordConv).
@@ -202,5 +178,5 @@ torch.save({"results": out, "n_train_values": N_TRAIN_SWEEP, "k_centers": k_cent
                      "identically to the baseline (5000 full-batch steps, seed 0), sampled with "
                      "the fixed sampler (sigma_max=10, 1000 steps, latents seed 42). Baseline "
                      "comparison: config D in edm_unet_sigma_fix_ablation.pt.")},
-           "/Users/ishittaiyer/Desktop/Research/results/data/edm_unet_coordconv.pt")
+           DATA_DIR / "edm_unet_coordconv.pt")
 print("\nsaved -> results/data/edm_unet_coordconv.pt")

@@ -66,6 +66,41 @@ def edm_loss_weight(sigma, sigma_data):
     return (sigma ** 2 + sigma_data ** 2) / (sigma * sigma_data) ** 2
 
 
+def hermitian_symmetrize(spectrum):
+    """Average a per-mode spectrum with its conjugate-index reflection lambda(-k).
+
+    The images are real, so their Fourier coefficients obey X_k = conj(X_{-k}) and any
+    valid power spectrum satisfies lambda(k) = lambda(-k). Spectra estimated as
+    mean|FFT(x)|^2 over real data already do; a hand-supplied or analytic spectrum may
+    not, and an asymmetric weighting has no real-valued minimizer — the per-mode formula
+    s*_k = s_k/(sigma^2 + c/lambda_k) would then quietly fail to describe the optimum.
+    Symmetrizing is the projection onto valid spectra and is a no-op for valid input.
+    """
+    reflected = torch.roll(torch.flip(spectrum, dims=(-2, -1)), shifts=(1, 1), dims=(-2, -1))
+    return 0.5 * (spectrum + reflected)
+
+
+def tikhonov_penalty(D_theta, x_noisy, sigma, c_tikhonov=0.0, c_tikhonov_cov=0.0, inv_lam=None):
+    """Per-sample Tikhonov penalty on the implied score, before the edm loss weight.
+
+    Isotropic (c_tikhonov):   c * ||D - x||^2 / sigma^2
+    Covariance (c_tikhonov_cov, needs inv_lam = 1/lambda(k) with null modes zeroed):
+                              c * mean_k |FFT(D - x)_k|^2 / (sigma^2 lambda(k))
+
+    Added to the denoising term ||D - x_0||^2, each drives the stationary score to
+    s* = s_true / (1 + c_eff/sigma^2) with c_eff = c (isotropic) or c/lambda(k) (per mode).
+    Shared by train_edm and its tests so both exercise one implementation.
+    """
+    s2 = sigma[:, None, None, None] ** 2
+    out = torch.zeros(D_theta.shape[0], device=D_theta.device, dtype=D_theta.dtype)
+    if c_tikhonov > 0.0:
+        out = out + c_tikhonov * ((D_theta - x_noisy) ** 2 / s2).mean(dim=(1, 2, 3))
+    if c_tikhonov_cov > 0.0:
+        R = torch.fft.fft2(D_theta - x_noisy, dim=(-2, -1), norm='ortho')
+        out = out + c_tikhonov_cov * ((R.abs() ** 2) * inv_lam / s2).mean(dim=(1, 2, 3))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Score Wrapper with Tikhonov Regularization
 # ---------------------------------------------------------------------------
@@ -127,6 +162,7 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
               base_channels=16, emb_dim=64, sigma_data=None,
               lr=1e-3, batch_size=8, P_mean=-1.2, P_std=1.2,
               c_tikhonov=0.0,
+              c_tikhonov_cov=0.0, cov_spectrum=None, null_rel_threshold=1e-6,
               seed=0, device="cpu", UNetClass=None):
     """
     Train a UNet with EDM preconditioning via denoising score matching.
@@ -139,6 +175,17 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
     i.e. the denominator changes from sigma^2 to sigma^2 + c.
     Ref: "Memorization and Regularization in GDM" (Baptista et al. 2025).
 
+    Covariance-weighted variant (c_tikhonov_cov > 0) adds instead, per Fourier mode k,
+
+        c_cov * weight(sigma) * mean_k |FFT(D_theta - x_noisy)_k|^2 / (sigma^2 * lambda(k))
+
+    with lambda(k) the per-mode data variance. Both the data term (Parseval, orthonormal
+    FFT) and the penalty are mode-diagonal, so the minimization decouples per mode and the
+    stationary score is s*_k = s_true,k / (1 + c/(sigma^2 lambda(k))), i.e. the denominator
+    becomes sigma^2 + c/lambda(k) — the training-time analogue of
+    GMM_score_CovarianceTikhonov. Null modes (lambda ~ 0) are left unregularized, matching
+    the pseudo-inverse semantics of the closed-form class.
+
     Args:
         train_data_flat: (n_train, N*N) flattened training images
         grid_size: spatial size N (images are N x N)
@@ -147,7 +194,11 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
         UNetClass: the raw UNet class (e.g. SmallUNet). Must accept
                    (base_channels, emb_dim) and forward(x, t).
         sigma_data: data std. If None, estimated from training data.
-        c_tikhonov: Tikhonov constant (0.0 = standard EDM, >0 = regularized).
+        c_tikhonov: isotropic Tikhonov constant (0.0 = standard EDM, >0 = regularized).
+        c_tikhonov_cov: covariance-weighted Tikhonov constant (0.0 = off).
+        cov_spectrum: (N, N) per-mode data variance lambda(k). If None and
+            c_tikhonov_cov > 0, estimated from the centered training data.
+        null_rel_threshold: modes with lambda < thr*mean(lambda) are left unregularized.
 
     Returns:
         dict {step -> EDMPrecond (eval mode, on device)}
@@ -157,6 +208,19 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
     if sigma_data is None:
         sigma_data = train_data_flat.std().item()
         print(f"Estimated sigma_data = {sigma_data:.4f}")
+
+    inv_lam = None
+    if c_tikhonov_cov > 0.0:
+        if cov_spectrum is None:
+            imgs = train_data_flat.reshape(-1, grid_size, grid_size)
+            imgs = imgs - imgs.mean(dim=0, keepdim=True)
+            cov_spectrum = (torch.fft.fft2(imgs, dim=(-2, -1), norm='ortho').abs() ** 2).mean(dim=0)
+        cov_spectrum = hermitian_symmetrize(cov_spectrum.to(device))
+        null_mask = cov_spectrum < null_rel_threshold * cov_spectrum.mean()
+        inv_lam = torch.where(null_mask, torch.zeros_like(cov_spectrum),
+                              1.0 / cov_spectrum.clamp_min(1e-30))[None, None, :, :]
+        print(f"Covariance Tikhonov: c={c_tikhonov_cov}, "
+              f"{int(null_mask.sum())}/{cov_spectrum.numel()} null modes unregularized")
 
     unet = UNetClass(base_channels=base_channels, emb_dim=emb_dim).to(device)
     precond = EDMPrecond(unet, sigma_data=sigma_data).to(device)
@@ -192,10 +256,13 @@ def train_edm(train_data_flat, grid_size, total_steps, checkpoint_at,
         # giving s* = s_true / (1 + c/σ²).  The denoising term is λ(σ)||D−x₀||²,
         # so the penalty must also carry λ(σ) for it to cancel in the stationary
         # condition:  λ(D−x₀) + c·λ(D−x)/σ² = 0  →  s* = s_true/(1+c/σ²).
-        if c_tikhonov > 0.0:
-            s2 = sigma[:, None, None, None] ** 2
-            score_penalty = ((D_theta - x_noisy) ** 2 / s2).mean(dim=(1, 2, 3))
-            loss = loss + c_tikhonov * (weight * score_penalty).mean()
+        # Covariance-weighted variant uses the same construction per Fourier mode, with
+        # the constant c replaced by c/lambda(k). Orthonormal FFT keeps Parseval, so its
+        # mode-mean is on the same scale as the pixel-mean data term above.
+        if c_tikhonov > 0.0 or c_tikhonov_cov > 0.0:
+            pen = tikhonov_penalty(D_theta, x_noisy, sigma, c_tikhonov=c_tikhonov,
+                                   c_tikhonov_cov=c_tikhonov_cov, inv_lam=inv_lam)
+            loss = loss + (weight * pen).mean()
 
         opt.zero_grad()
         loss.backward()

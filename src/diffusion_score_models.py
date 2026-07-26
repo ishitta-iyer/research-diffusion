@@ -29,7 +29,10 @@ class DiffusionModel:
         x = init_x
 
         # define steps
-        time_steps = torch.linspace(self.T, self.eps, num_steps)
+        # NOTE: time_steps must live on the sampler's device. On MPS, multiplying a
+        # device tensor by a CPU 0-dim *view* (time_steps[j]) silently reads storage
+        # offset 0 (PyTorch MPS bug), freezing the schedule at its first value.
+        time_steps = torch.linspace(self.T, self.eps, num_steps, device=latents.device)
         dt = time_steps[0] - time_steps[1]
 
         with torch.no_grad():
@@ -92,8 +95,8 @@ class DiffusionModel:
         init_x = latents * self.marginal_prob_std(init_T)[:, None]
         x = init_x
 
-        # define steps
-        time_steps = torch.linspace(self.T, self.eps, num_steps)
+        # define steps (on the sampler's device — see note in SDEsampler)
+        time_steps = torch.linspace(self.T, self.eps, num_steps, device=latents.device)
         dt = time_steps[0] - time_steps[1]
 
         with torch.no_grad():
@@ -106,7 +109,7 @@ class DiffusionModel:
                 g = self.diffusion_coeff(batch_time)
                 drift = (-1.*f + 0.5*(g**2)[:,None]*sx)
                 x = x + dt * drift
-        
+
         return (time_steps, x)
 
 class VP(DiffusionModel):
@@ -154,12 +157,12 @@ class VE(DiffusionModel):
         self.sigma = 10.
 
     def drift(self, x, t):
-        return torch.zeros(x.shape)
+        return torch.zeros_like(x)
 
     def marginal_prob_mean(self, t):
         """ Compute the mean factor of $p_{0:t}(x(t) | x(0))$.
         """
-        return torch.ones((1,))
+        return torch.ones_like(t)
 
     def marginal_prob_std(self, t):
         """Compute the standard deviation of $p_{0:t}(x(t) | x(0))$.
@@ -210,13 +213,13 @@ class GMM_score(nn.Module):
         sigma = self.marginal_prob_std(t)
         meanf = self.marginal_prob_mean(t)
         # evaluate Gaussian densities
-        logpdf_x_yi = torch.zeros((x.shape[0],self.train_data.shape[0]))
+        logpdf_x_yi = torch.zeros((x.shape[0],self.train_data.shape[0]), device=x.device)
         for i in range(self.train_data.shape[0]):
             logpdf_x_yi[:,i] = self.log_normal_pdf(x, meanf[:,None] * self.train_data[i,:], sigma)
         # compute weighted average
         weights = torch.softmax(logpdf_x_yi, axis=1)
         return weights
-        
+
     def forward(self, x, t):
         # compute weights
         weights = self.pdf_weights(x, t)
@@ -243,18 +246,92 @@ class GMM_score_TikhonovRegularized(GMM_score):
     def __init__(self, train_data, marginal_prob_mean, marginal_prob_std, diffusion_coeff, constant=1.0):
         super().__init__(train_data, marginal_prob_mean, marginal_prob_std)
         self.diffusion_coeff = diffusion_coeff
-        self.constant = torch.tensor([constant])
-        
+        self.constant = float(constant)
+
     def forward(self, x, t):
         # compute weights
-        weights = self.pdf_weights(x, t)     
-        # compute sigma and diffusion coefficient   
+        weights = self.pdf_weights(x, t)
+        # compute sigma
         sigma = self.marginal_prob_std(t)
-        g = self.diffusion_coeff(t)
         # compute weighted average
         evals = self.marginal_prob_mean(t)[:,None] * torch.mm(weights, self.train_data)
         evals[torch.isnan(evals)] = 0.0
         return (evals - x)/(sigma[:, None]**2 + self.constant)
+
+class GMM_score_CovarianceTikhonov(GMM_score):
+    '''
+    GMM score with covariance-weighted Tikhonov regularization
+    (Baptista et al. 2025, Sec. 5.1, with matrix weight Gamma(t) = (c/sigma^2) Sigma^{-1}).
+
+    Regularized DSM objective at time t:  J(s) + (c/sigma^2)*E||s||^2_Sigma, where
+    ||v||^2_Sigma = v^T Sigma^{-1} v and Sigma is the covariance of the training data.
+    Stationary point in the eigenbasis of Sigma (eigenvalues lambda_i):
+
+        s*_i = (m(t)*xbar(x) - x)_i / (sigma^2 + c/lambda_i)
+
+    i.e. the isotropic Tikhonov denominator sigma^2 + c with the constant replaced by
+    the mode-dependent c/lambda_i: low-variance (fine-scale) modes are damped harder.
+    c = 0 recovers GMM_score; lambda == 1 recovers GMM_score_TikhonovRegularized.
+
+    The fields are stationary, so Sigma is diagonal in the 2-D Fourier basis and
+    lambda is the per-mode power spectrum of the centered training data, estimated
+    with an orthonormal FFT so that mean(lambda) ~ data variance ~ 1 and the constant
+    c stays on the same scale as the isotropic sweep.
+
+    weighting='inverse' (default): effective constant c/lambda (penalty s^T Sigma^{-1} s).
+    weighting='direct':  effective constant c*lambda (penalty s^T Sigma s) — the
+        anti-weighted control that regularizes high-variance (coarse) modes more.
+
+    Null modes: where lambda < null_rel_threshold*mean(lambda) (DC and out-of-band k
+    for band-limited data), Sigma is singular and a literal Sigma^{-1} would infinitely
+    penalize the score there, zeroing it and letting the reverse SDE fill those modes
+    with noise. We use pseudo-inverse semantics instead: null modes are left
+    unregularized, so the unregularized score keeps pulling them to zero.
+
+    spectrum: optional (grid_size, grid_size) per-mode variance to use in place of the
+    empirical spectrum of train_data (e.g. a near-population spectrum estimated from a
+    large freshly generated sample).
+    '''
+    def __init__(self, train_data, marginal_prob_mean, marginal_prob_std, grid_size,
+                 constant=1.0, spectrum=None, null_rel_threshold=1e-6, weighting='inverse'):
+        super().__init__(train_data, marginal_prob_mean, marginal_prob_std)
+        self.grid_size = grid_size
+        self.constant = float(constant)
+        self.weighting = weighting
+        if spectrum is None:
+            imgs = train_data.reshape(-1, grid_size, grid_size)
+            imgs = imgs - imgs.mean(dim=0, keepdim=True)
+            X = torch.fft.fft2(imgs, dim=(-2, -1), norm='ortho')
+            spectrum = (X.abs() ** 2).mean(dim=0)              # (N, N) per-mode variance
+        # real images => lambda(k) = lambda(-k); enforce it so a hand-supplied spectrum
+        # cannot produce a weighting with no real-valued minimizer (no-op if already valid)
+        reflected = torch.roll(torch.flip(spectrum, dims=(-2, -1)), shifts=(1, 1), dims=(-2, -1))
+        spectrum = 0.5 * (spectrum + reflected)
+        null_mask = spectrum < null_rel_threshold * spectrum.mean()
+        if weighting == 'inverse':
+            c_eff = torch.where(null_mask, torch.zeros_like(spectrum),
+                                constant / spectrum.clamp_min(1e-30))
+        elif weighting == 'direct':
+            c_eff = torch.where(null_mask, torch.zeros_like(spectrum), constant * spectrum)
+        else:
+            raise ValueError(f"weighting must be 'inverse' or 'direct', got {weighting!r}")
+        self.register_buffer('spectrum_buf', spectrum)
+        self.register_buffer('c_eff', c_eff)
+        self.register_buffer('null_mask', null_mask)
+
+    def forward(self, x, t):
+        # softmax mixture weights and posterior mean, same as GMM_score
+        weights = self.pdf_weights(x, t)
+        sigma = self.marginal_prob_std(t)
+        evals = self.marginal_prob_mean(t)[:, None] * torch.mm(weights, self.train_data)
+        evals[torch.isnan(evals)] = 0.0
+        # mode-dependent denominator sigma^2 + c_eff, applied in Fourier space
+        Ngrid = self.grid_size
+        resid = (evals - x).reshape(-1, Ngrid, Ngrid)
+        R = torch.fft.fft2(resid, dim=(-2, -1), norm='ortho')
+        denom = sigma[:, None, None] ** 2 + self.c_eff[None, :, :]
+        score = torch.fft.ifft2(R / denom, dim=(-2, -1), norm='ortho').real
+        return score.reshape(x.shape)
 
 class GMM_score_EmpiricalBayes(GMM_score):
     '''
@@ -270,7 +347,7 @@ class GMM_score_EmpiricalBayes(GMM_score):
         sigma = self.marginal_prob_std(t)
         meanf = self.marginal_prob_mean(t)
         # evaluate Gaussian densities
-        logpdf_x_yi = torch.zeros((x.shape[0],self.train_data.shape[0]))
+        logpdf_x_yi = torch.zeros((x.shape[0],self.train_data.shape[0]), device=x.device)
         for i in range(self.train_data.shape[0]):
             logpdf_x_yi[:,i] = self.log_normal_pdf(x, meanf[:,None] * self.train_data[i,:], sigma)
         # compute regularized weighted average
