@@ -40,7 +40,11 @@ Regularization in Generative Diffusion Models*, [arXiv:2501.15785](https://arxiv
   `coordconv_experiment.py`) and clean notebook exports.
 - `tests/test_consolidation.py` — run `python3 src/tests/test_consolidation.py`. Pins the score
   reductions, the U-Net equivalence, the two Tikhonov **stationary points** against the paper's
-  closed forms, the metric's n_train-independence, and the MPS sampler regression (below).
+  closed forms, and the MPS sampler regression (below). On the metric it pins only that
+  `exclude_nn=True` removes the 1/n_train floor — i.e. near-total memorization scores ≈ 0 at
+  n_train ∈ {2,4,8}, the regime where the ratio is pinned near zero. It does **not** pin
+  n_train-independence in the interesting regime, and the metric is not n_train-independent
+  (see Gotchas).
 
 ## Notebooks (`notebooks/`)
 
@@ -58,8 +62,9 @@ Regularization in Generative Diffusion Models*, [arXiv:2501.15785](https://arxiv
     `gmm_tikhonov_variants_comparison.ipynb` (**the controlled comparison** — see below);
     `edm_unet_covariance_tikhonov.ipynb` (training-time covariance penalty in the U-Net).
   - **U-Net memorization mechanism:** `edm_unet_train_size_sweep.ipynb`,
-    `edm_unet_train_size_sweep_sigma_fix.ipynb` (diagnosed the train/sample σ mismatch → use
-    σ_max = 10), `edm_unet_memorization_mechanism.ipynb` (denoiser gap, basin reachability,
+    `edm_unet_train_size_sweep_sigma_fix.ipynb` (sampler ablation: σ-range and discretization
+    both null → σ_max = 10 kept for consistency, see Gotchas),
+    `edm_unet_memorization_mechanism.ipynb` (denoiser gap, basin reachability,
     CoordConv: memorization is *in* the net but unreachable from pure noise).
   - **Transition / capacity:** `edm_unet_memorization_transition.ipynb` (n_train × training time),
     `edm_unet_capacity_sweep.ipynb` (width × depth).
@@ -80,6 +85,35 @@ Regularization in Generative Diffusion Models*, [arXiv:2501.15785](https://arxiv
   `time_steps` is now created on the sampler's device; `test_sde_sampler_contracts_on_each_device`
   guards it. **Any MPS result produced before this fix is invalid.**
 - **Metric floor at small n_train.** See `exclude_nn` above.
+- **Metric convention, and why a coarse score below 1 is not evidence on its own.** Two
+  conventions are locked, and as of 2026-08-04 `paper/main.tex` is being changed to state them
+  (the code is correct and unchanged):
+  - *Aggregation*: **mean-of-ratios**, `mean_j(e_NN / e_rand_j)` — the `evaluate` default, used
+    by every committed number. `ratio_of_means` remains available as an alternative
+    aggregation (effect: −0.031 coarse).
+  - *Normalization*: `ring_rel_l2` divides **both** terms by the **generated sample's** ring
+    norm, so the normalization cancels and the metric is a pure error ratio (normalizing by the
+    reference field instead: +0.073 coarse).
+
+  Neither convention makes the score n_train-independent. Two confounds survive: (i) a Jensen
+  gap of ~0.03 coarse under mean-of-ratios, exactly 0 at n_train=2 where only one non-NN
+  reference exists so `err_rand` has zero variance and the two aggregations coincide *exactly*;
+  (ii) the larger one — the NN is an **argmin over n_train candidates**, so the best-of-n match
+  improves and the neutral score falls as n_train grows. Held-out real fields (perfect
+  generalization), `exclude_nn=True`, coarse band, mean-of-ratios:
+  0.8567 (n=2), 0.9050 (4), 0.8448 (8), 0.8150 (16), 0.8126 (32).
+  **Rule:** on an n_train axis always report scores against the per-n_train neutral baseline
+  computed under the same convention. Switching aggregation is not the fix.
+- **σ_max = 10 is a consistency choice, not a fix.** `edm_unet_train_size_sweep_sigma_fix.ipynb`
+  pre-registered a decision rule over four sampler configs — A (σ_max 80, 500 steps), B (80, 2000),
+  C (10, 500), D (10, 1000): *C ≈ D ≪ A ≈ B* ⇒ σ-range is the cause; *B ≪ A, C ≈ A* ⇒
+  discretization; *all ≈ A* ⇒ neither explains it. The measured coarse ratios are
+  **all ≈ A** — n=4: 0.9112 / 0.8954 / 0.8773 / 0.8959; n=32: 0.8081 / 0.8322 / 0.8111 / 0.8028,
+  a spread of 0.005–0.034, inside the 0.03–0.06 seed noise. So the ablation is **null**: the
+  sampler was ruled out, not fixed. σ_max = 10 is retained everywhere purely so all U-Net runs
+  are mutually comparable. Do **not** describe this as a diagnosed train/sample σ mismatch.
+  The ablation's own third branch points at the *training* σ distribution (broader `P_mean`/
+  `P_std`) — still open, and the same axis as the σ_max-vs-spacing question.
 - **`length_scale`** in `generate_matern_laplace` is the spectral shift ℓ² in `(|k|²+ℓ²)^{-s}`, so
   *larger* values mean *finer* fields. The hard band masks make the actual band unambiguous.
 - **Hermitian symmetry.** A power spectrum of real data satisfies λ(k) = λ(−k). Hand-supplied
@@ -128,8 +162,8 @@ Figures: `results/figures/tikvariants_{per_k,band_scores,generated_spectra}.png`
 barely memorizes from pure noise (coarse ratio 0.81–0.91) even though memorization is present
 in the weights (train/held-out denoiser gap up to ~15× at σ ≲ 2; memorized basins 100%
 reachable from `y + σ₀ε`). Diagnosis: the U-Net is an *amplifier* of whatever coarse content is
-in its initialization, whereas the GMM is a *classifier* of it. A train/sample σ mismatch was
-also found — sampling must use σ_max = 10, not 80.
+in its initialization, whereas the GMM is a *classifier* of it. The sampler was **ruled out, not
+fixed** — see Gotchas; σ_max = 10 is a consistency choice, not a correction.
 
 ## Next steps
 

@@ -10,6 +10,14 @@ neighbour, normalized by the same error to random training images:
 
 ratio < 1  =>  the generated sample is closer to its NN than to random training
 images in that band (memorized); ratio ~ 1 => novel in that band.
+
+Two conventions are baked in, and paper/main.tex states both:
+
+* Normalization. `ring_rel_l2` normalizes *both* terms by the **generated
+  sample's** ring norm, so the normalization cancels in the ratio and the metric
+  is a pure error ratio. This is deliberate.
+* Aggregation. The ratio is the mean over the J reference draws of the per-draw
+  ratio (mean-of-ratios). Every committed result uses this.
 """
 
 import torch
@@ -45,6 +53,15 @@ def make_ring_masks(N, k_edges, device='cpu'):
 
 @torch.no_grad()
 def ring_rel_l2(xa, xb, ring_masks, fft_norm=None, eps=1e-12):
+    """Per-ring relative L2 distance between xa and xb, normalized by **xa**.
+
+    Call sites pass xa = x_gen, so both the NN error and the random-reference
+    errors are divided by the same quantity, the generated sample's ring norm.
+    The normalization therefore cancels out of the memorization ratio, which is a
+    pure error ratio. This is intentional and is what paper/main.tex states;
+    normalizing each term by its own reference field instead would not cancel
+    (measured effect on held-out fields: +0.073 on the coarse band).
+    """
     Xa = torch.fft.fft2(xa, dim=(-2, -1), norm=fft_norm)
     Xb = torch.fft.fft2(xb, dim=(-2, -1), norm=fft_norm)
     D = Xa - Xb
@@ -64,7 +81,25 @@ def random_baseline_errors(xg, xtr, ring_masks, n_ref=32, fft_norm=None, exclude
     (normally the nearest neighbour). Without it the NN is itself part of the baseline,
     which floors the ratio at ~1/n_train and makes scores incomparable across training
     set sizes: with n_train=2 a random draw IS the NN half the time, so even perfect
-    memorization gives ratio ~0.5. Excluding it makes the metric n_train-independent.
+    memorization gives ratio ~0.5. Excluding it removes that floor.
+
+    It does NOT by itself make the metric n_train-independent, and no choice of
+    aggregation makes it so either. Two residual n_train dependencies remain:
+
+    1. A Jensen gap under the default mean-of-ratios aggregation, ~0.03 on the coarse
+       band. It is exactly 0 at n_train=2 (only one non-NN reference exists, so
+       err_rand has zero variance across draws) and ~0.03 from n_train=4 up.
+    2. A larger confound that no aggregation touches: the nearest neighbour is an
+       argmin over n_train candidates, so the best-of-n_train match improves as
+       n_train grows and the neutral baseline itself falls.
+
+    The remedy for both is the **neutral baseline**, not the aggregation knob: report
+    every score against the per-n_train score of held-out real fields (perfect
+    generalization), computed under the same convention. Measured coarse-band neutral
+    baseline, exclude_nn=True, mean-of-ratios:
+
+        n_train:  2       4       8       16      32
+                  0.8567  0.9050  0.8448  0.8150  0.8126
     """
     n_train = xtr.shape[0]
     errs = []
@@ -111,19 +146,37 @@ class RingMetricContext:
                            for name, band in bands.items()}
 
     @torch.no_grad()
-    def evaluate(self, x_gen, x_train, n_rand_ref=32, exclude_nn=False):
+    def evaluate(self, x_gen, x_train, n_rand_ref=32, exclude_nn=False,
+                 aggregate='mean_of_ratios'):
         """Returns dict with per-k mean ratio, per-sample coarse/fine scores, and NN indices.
 
         exclude_nn=True drops the nearest neighbour from the random baseline, which is
         required whenever scores are compared across different training-set sizes
         (see random_baseline_errors). Default False preserves the metric used by the
         earlier committed sweeps, which all run at a single n_train.
+
+        aggregate: 'mean_of_ratios' (default) computes mean_j(e_NN / e_rand_j). This is
+        the definition stated in paper/main.tex eq. (5)-(6) and the one every committed
+        result uses. 'ratio_of_means' computes e_NN / mean_j(e_rand_j) and is available
+        as an alternative aggregation. By Jensen, mean-of-ratios >= ratio-of-means, by an
+        amount proportional to the variance of e_rand_j across draws.
+
+        On an n_train axis, do not switch aggregation to chase comparability — neither
+        choice removes the n_train dependence (see random_baseline_errors). Report scores
+        against the per-n_train neutral baseline computed under the same convention.
+        n_train=2 is the zero-variance special case: with exclude_nn=True only one
+        reference remains, so the two aggregations coincide exactly.
         """
         idx_nn, _ = nn_by_coarse(x_gen, x_train, self.bands['coarse'])
         err_nn = ring_rel_l2(x_gen, x_train[idx_nn], self.ring_masks)
         err_rand = random_baseline_errors(x_gen, x_train, self.ring_masks, n_ref=n_rand_ref,
                                           exclude_idx=idx_nn if exclude_nn else None)
-        ratio = (err_nn.unsqueeze(0) / (err_rand + 1e-12)).mean(dim=0)   # (G, K)
+        if aggregate == 'mean_of_ratios':
+            ratio = (err_nn.unsqueeze(0) / (err_rand + 1e-12)).mean(dim=0)   # (G, K)
+        elif aggregate == 'ratio_of_means':
+            ratio = err_nn / (err_rand.mean(dim=0) + 1e-12)                  # (G, K)
+        else:
+            raise ValueError(f"unknown aggregate {aggregate!r}")
         out = {
             'ratio': ratio,
             'mean_ratio': ratio.mean(dim=0),
