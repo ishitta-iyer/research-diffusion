@@ -1,7 +1,7 @@
 #!/bin/bash
 # Baptista et al. section 5.4 rectangles, N=2 -- Figure 18 reproduction on Killarney.
 #
-# Runs notebooks/multiscale/baptista_rectangles_n2_reproduction.ipynb.
+# Runs notebooks/multiscale/rectangles_n2_reproduction.ipynb.
 # Safe to resubmit: each arm resumes from its own state dump, completed arms are skipped.
 #
 # SUBMIT FROM THE REPO ROOT:
@@ -53,7 +53,7 @@ python3 -m nbconvert --to notebook --execute \
     --ExecutePreprocessor.kernel_name=python3 \
     --output-dir results/notebook_runs \
     --output "rect_n2_${SLURM_JOB_ID}.ipynb" \
-    notebooks/multiscale/baptista_rectangles_n2_reproduction.ipynb
+    notebooks/multiscale/rectangles_n2_reproduction.ipynb
 
 echo "finished $(date)"
 

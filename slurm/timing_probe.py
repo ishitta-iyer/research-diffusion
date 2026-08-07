@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 
 REPO = Path(__file__).resolve().parent.parent
-NB = REPO / "notebooks/multiscale/baptista_rectangles_n2_reproduction.ipynb"
+NB = REPO / "notebooks/multiscale/rectangles_n2_reproduction.ipynb"
 
 # Load the notebook's definitions (everything before the config cell).
 os.chdir(NB.parent)
