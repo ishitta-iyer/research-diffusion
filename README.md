@@ -1,4 +1,4 @@
-# Memorization in Multiscale Diffusion Models
+# Memorization of Multiscale data in Diffusion Models
 
 Code for studying how score-based diffusion models memorize training data across
 frequency scales. We generate synthetic Matérn Gaussian fields with controlled
