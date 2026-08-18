@@ -65,6 +65,10 @@ notes/archive/
 CLAUDE.md
 docs/
 
+# Keep all Markdown local except the repository's root README.
+*.md
+!/README.md
+
 # =========================
 # Paper draft (local + Overleaf only; protects review anonymity)
 # =========================
