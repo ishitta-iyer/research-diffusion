@@ -172,3 +172,123 @@ def add_fourier_bias_to_result(
         out["combined"] = x_biased
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Active rescaled-Matérn SongUNet helpers
+# ---------------------------------------------------------------------------
+
+SONGUNET_MULTIBAND_COMPONENTS = (
+    {"name": "coarse", "length_scale": 2.0, "s": 2.0,
+     "sigma_sq": 1.0, "band": (0.5, 4.0)},
+    {"name": "mid1", "length_scale": 6.0, "s": 2.0,
+     "sigma_sq": 1.0, "band": (4.0, 10.0)},
+    {"name": "mid2", "length_scale": 12.0, "s": 2.0,
+     "sigma_sq": 1.0, "band": (10.0, 18.0)},
+    {"name": "fine", "length_scale": 24.0, "s": 2.0,
+     "sigma_sq": 1.0, "band": (18.0, 32.0)},
+)
+SONGUNET_MULTIBAND_WEIGHTS = (1.0, 0.8, 0.8, 1.2)
+
+
+def baptista_rectangle_pair(grid_size=64, dtype=torch.float32, device=None):
+    """The two rectangles constructed in upstream ``RectangleImages/main.py``."""
+    data = torch.zeros((2, 1, grid_size, grid_size), dtype=dtype, device=device)
+    data[0, 0, 6:18, 6:18] = 1.0
+    data[1, 0, 40:54, 40:54] = 1.0
+    return data
+
+
+def first_pair_distance(fields):
+    flat = fields[:2].reshape(2, -1)
+    return torch.cdist(flat, flat)[0, 1]
+
+
+def rescale_to_pair_distance(fields, target_distance):
+    """Scale every field so the first pair has the requested Euclidean distance."""
+    distance = first_pair_distance(fields)
+    if distance <= 0:
+        raise ValueError("first two fields must have nonzero separation")
+    # Match the active notebooks exactly: cdist(...).item() followed by Python-float
+    # division. Keeping this scalar at double precision is required for bit-exact
+    # reconstruction of the saved analytic covariance spectrum.
+    scale = float(target_distance) / distance.item()
+    return fields * scale, scale
+
+
+def generate_rescaled_songunet_matern_pool(num_samples=200, grid_size=128, seed=42,
+                                           target_distance=None, device=None):
+    """Generate the active normalized Matérn pool and match the rectangle-pair geometry."""
+    if target_distance is None:
+        target_distance = float(340.0 ** 0.5)
+    result = generate_multiband_dataset_postmask(
+        num_samples=num_samples,
+        grid_size=grid_size,
+        components=[dict(component) for component in SONGUNET_MULTIBAND_COMPONENTS],
+        weights=list(SONGUNET_MULTIBAND_WEIGHTS),
+        seed=seed,
+        normalize=True,
+        device=device,
+    )
+    fields = result["combined"].reshape(num_samples, 1, grid_size, grid_size).clone().float()
+    rescaled, scale = rescale_to_pair_distance(fields, target_distance)
+    result["combined_rescaled"] = rescaled
+    result["scale"] = scale
+    result["target_distance"] = float(target_distance)
+    return result
+
+
+def analytic_multiband_spectrum(grid_size, components, weights, normalization_std=1.0,
+                                scale=1.0, dtype=torch.float64, device=None):
+    """Analytic per-mode spectrum used by the active covariance SongUNet runs."""
+    knrm = make_knrm_grid(grid_size, device=device).to(dtype)
+    spectrum = torch.zeros(grid_size, grid_size, dtype=dtype, device=device)
+    for component, weight in zip(components, weights):
+        component_spectrum = component.get("sigma_sq", 1.0) * (
+            knrm ** 2 + component["length_scale"] ** 2) ** (-component.get("s", 2.0))
+        component_spectrum[0, 0] = 0.0
+        low, high = component["band"]
+        component_spectrum = component_spectrum * (
+            (knrm >= low) & (knrm < high)).to(dtype)
+        spectrum += weight ** 2 * component_spectrum
+    return spectrum / normalization_std ** 2 * scale ** 2
+
+
+def inverse_spectrum_weights(spectrum, null_rel_threshold=1e-4,
+                             budget_normalize=True):
+    """Pseudo-inverse weights with the active null rule and exact M^2 budget."""
+    positive = spectrum > 0
+    if not positive.any():
+        raise ValueError("spectrum has no positive modes")
+    active = positive & (spectrum > null_rel_threshold * spectrum[positive].mean())
+    inverse = torch.where(active, 1.0 / spectrum.clamp_min(1e-30),
+                          torch.zeros_like(spectrum))
+    if budget_normalize:
+        mode_count = spectrum.numel()
+        inverse = inverse * (mode_count ** 2 / inverse.sum())
+    return inverse, active
+
+
+def radial_average_spectrum(fields):
+    """Uncentered radial periodogram used by the active empirical-covariance arms."""
+    grid_size = fields.shape[-1]
+    knrm = make_knrm_grid(grid_size, device=fields.device).to(torch.float64)
+    ring = knrm.round().long()
+    ring_count = int(ring.max()) + 1
+    counts = torch.zeros(ring_count, dtype=torch.float64, device=fields.device).index_add_(
+        0, ring.flatten(), torch.ones(grid_size * grid_size, dtype=torch.float64,
+                                     device=fields.device))
+    power = torch.fft.fft2(fields.double(), norm="forward").abs().square().mean(0)
+    totals = torch.zeros(ring_count, dtype=torch.float64, device=fields.device).index_add_(
+        0, ring.flatten(), power.flatten())
+    return (totals / counts.clamp_min(1))[ring]
+
+
+def anchor_regenerated_fields(regenerated, saved, rtol=1e-6, atol=1e-7):
+    """Validate cross-platform FFT agreement, then copy the saved tensors exactly."""
+    if not torch.allclose(regenerated, saved, rtol=rtol, atol=atol):
+        delta = (regenerated - saved).abs().max().item()
+        raise ValueError(f"regenerated fields differ materially; max_abs={delta:.3e}")
+    anchored = regenerated.clone()
+    anchored.copy_(saved)
+    return anchored

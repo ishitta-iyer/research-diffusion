@@ -1,6 +1,6 @@
 """Regenerate notes/results_table.md from the artifacts on disk.
 
-Every number is either read from a results/data/*.pt or recomputed here. Nothing is
+Every number is either read from an active or archived results artifact or recomputed here. Nothing is
 transcribed from prose. Re-run after any experiment changes.
 """
 import sys, os, json, subprocess, datetime
@@ -17,6 +17,8 @@ def w(s=''): OUT.append(s)
 
 def load(name):
     p = os.path.join('results/data', name)
+    if not os.path.exists(p):
+        p = os.path.join('results/archived/smallunet/data', name)
     if not os.path.exists(p): return None, None
     ts = datetime.datetime.fromtimestamp(os.path.getmtime(p)).strftime('%Y-%m-%d %H:%M')
     return torch.load(p, map_location='cpu', weights_only=False), ts
@@ -64,13 +66,15 @@ if ms:
     SEED_STD = float(np.sqrt(np.mean([np.var(g, ddof=1) for g in _gaps.values()])))
 
 sha = subprocess.run(['git','rev-parse','--short','HEAD'],capture_output=True,text=True).stdout.strip()
+branch = subprocess.run(['git', 'branch', '--show-current'], capture_output=True,
+                        text=True).stdout.strip()
 w(f"# Consolidated results table")
 w()
 w(f"Generated from the artifacts on disk. Do not hand-edit; regenerate with")
 w(f"`python3 notes/build_results_table.py`.")
-w(f"Repo HEAD `{sha}`, branch `followup`, built {datetime.date.today().isoformat()}.")
+w(f"Repo HEAD `{sha}`, branch `{branch}`, built {datetime.date.today().isoformat()}.")
 w()
-w("Every number below is read from a `results/data/*.pt` or recomputed from the seeded dataset")
+w("Every number below is read from an active or archived `.pt` artifact or recomputed from the seeded dataset")
 w("at build time. Provenance is given per block. Numbers that cannot be traced to an artifact")
 w("are listed in section 10 and are not for citation.")
 w()
@@ -256,8 +260,21 @@ w("The n_train=2 entry matches to 0.0000 under every configuration tested, which
 w("zero-variance special case described below.")
 w()
 
+ARCHIVED_SMALLUNET = {
+    'capacity_multiseed', 'edm_tikhonov_memorization', 'edm_unet_capacity_sweep',
+    'edm_unet_covariance_tikhonov', 'edm_unet_dimension_probe',
+    'edm_unet_memorization_mechanism', 'edm_unet_memorization_transition',
+    'edm_unet_train_size_sweep', 'edm_unet_train_size_sweep_sigma_fix',
+    'sigma_spacing_sweep', 'unet_update_budget_batchsize',
+}
+
+
 def prov(nb, pt, ts, extra=''):
-    w(f"*Provenance:* `notebooks/multiscale/{nb}.ipynb` -> `results/data/{pt}` ({ts}). {extra}")
+    nb_dir = 'notebooks/archived/smallunet' if nb in ARCHIVED_SMALLUNET else 'notebooks/multiscale'
+    data_dir = ('results/archived/smallunet/data'
+                if os.path.exists(os.path.join('results/archived/smallunet/data', pt))
+                else 'results/data')
+    w(f"*Provenance:* `{nb_dir}/{nb}.ipynb` -> `{data_dir}/{pt}` ({ts}). {extra}")
     w()
 
 # ------------------------------------------------- A: GMM memorizes at all scales
@@ -427,7 +444,8 @@ if tk:
 prov('gmm_tikhonov_variants_comparison','gmm_tikhonov_variants_sweep.pt',tkts,
      'Closed form, no training, no seed. Sampler for this block is `sigma_max=80`, 500 SDE steps, '
      'which differs from the U-Net blocks below; it is internally consistent across all five variants. '
-     'Figures `results/figures/tikvariants_{per_k,band_scores,generated_spectra}.png`.')
+     'Figures `results/archived/non_songunet/figures/'
+     'tikvariants_{per_k,band_scores,generated_spectra}.png`.')
 
 # ------------------------------------------------- C: transition
 w("## 5. Result C. U-Net, training-set size against training time")
@@ -478,7 +496,7 @@ w("sampler, latents and metric gives 1.00. That is a binary outcome with no thre
 w()
 prov('edm_unet_memorization_transition','edm_unet_transition_results.pt',trts,
      'Checkpoints in `edm_unet_transition_checkpoints.pt`. Single seed (`seed=0`). '
-     'Figure `results/figures/unet_transition_curves.png` predates the neutral line and does not show it.')
+     'Figure `results/archived/smallunet/figures/unet_transition_curves.png` predates the neutral line and does not show it.')
 
 # ------------------------------------------------- D: capacity, multi-seed
 w("## 6. Result D. U-Net capacity across training seeds")
@@ -557,7 +575,7 @@ if ms:
         (cm8,cs8),_,_ = NEUTRAL[8]
         order = sorted(cap['eval_results'], key=lambda k: cap['configs'][k]['n_params'])
         g={n: cap['eval_results'][n][30000]['coarse_score']-cm8 for n in order}
-        w("`edm_unet_capacity_sweep.ipynb` ran the same architectures at seed 0 on MPS, scored against")
+        w("`notebooks/archived/smallunet/edm_unet_capacity_sweep.ipynb` ran the same architectures at seed 0 on MPS, scored against")
         w(f"a CPU-computed neutral. It reported the two smallest *above* the line ({g[order[0]]:+.4f}, {g[order[1]]:+.4f})")
         w(f"and a monotone ordering. Here the same two sit at {np.mean(G[order[0]]):+.4f} and {np.mean(G[order[1]]):+.4f}.")
         w()
@@ -584,8 +602,8 @@ if ms:
     w()
     prov('capacity_multiseed','capacity_multiseed.pt',msts,
          f"Checkpoints in `capacity_multiseed_checkpoints.pt`. Seeds {list(SEEDS)}, device "
-         f"`{ms['device']}` (NVIDIA L40S, Killarney). Figure `results/figures/capacity_multiseed.png`. "
-         "Supersedes `edm_unet_capacity_sweep.ipynb` / `edm_unet_capacity_results.pt`, which was "
+         f"`{ms['device']}` (NVIDIA L40S, Killarney). Figure `results/archived/smallunet/figures/capacity_multiseed.png`. "
+         "Supersedes `notebooks/archived/smallunet/edm_unet_capacity_sweep.ipynb` / `edm_unet_capacity_results.pt`, which was "
          "single-seed and on MPS.")
 
 # ------------------------------------------------- E: batch size
@@ -637,7 +655,7 @@ if bs:
     w()
     prov('unet_update_budget_batchsize','unet_update_budget_batchsize.pt',bsts,
          'Checkpoints in `unet_update_budget_checkpoints.pt`. Single seed. '
-         'Figure `results/figures/unet_update_budget_batchsize.png`.')
+         'Figure `results/archived/smallunet/figures/unet_update_budget_batchsize.png`.')
 
 # ------------------------------------------------- F: dimension probe
 w("## 8. Result F. Intrinsic dimension")
@@ -706,7 +724,7 @@ w()
 prov('edm_unet_dimension_probe','edm_unet_dimension_probe.pt',dpts,
      'Single seed. Notebook was unrunnable as committed (it called a `RingMetricContext.fresh_baseline` '
      'method that does not exist); the baseline is now computed inline in the notebook, `src/` unchanged. '
-     'Committed figure `results/figures/unet_dimension_probe.png` predates that fix.')
+     'Committed figure `results/archived/smallunet/figures/unet_dimension_probe.png` predates that fix.')
 
 # ------------------------------------------------- G: sampler sigma_max / spacing
 w("## 9. Result G. Sampler sigma_max and step spacing")
@@ -781,13 +799,13 @@ if ss:
     w("reference field, so its neutral line has zero reference-draw variance and its gaps are the")
     w("least stable in the document.")
     w()
-    w("This supersedes `edm_unet_train_size_sweep_sigma_fix.ipynb`, whose grid held both")
+    w("This supersedes `notebooks/archived/smallunet/edm_unet_train_size_sweep_sigma_fix.ipynb`, whose grid held both")
     w("`sigma_max` values in the same regime and neither step count near 40.")
     w()
     prov('sigma_spacing_sweep','sigma_spacing_sweep_v2.pt',ssts,
          f"Checkpoints in `sigma_spacing_checkpoints.pt`. Train seed {ss['train_seed']}, device "
          f"`{ss['device']}` (NVIDIA L40S, Killarney). Evaluation only, no retraining between cells. "
-         "Figure `results/figures/sigma_spacing_sweep.png`.")
+         "Figure `results/archived/smallunet/figures/sigma_spacing_sweep.png`.")
 
 # ------------------------------------------------- 9 not citable
 w("## 10. Not for citation")
@@ -795,17 +813,17 @@ w()
 w("| item | why |")
 w("|---|---|")
 w("| `memorization_regime_sweep.ipynb`, GMM columns | VP diffusion, `exclude_nn=False`. Its n_train sweep 0.222 / 0.100 / 0.059 / 0.036 at N in {5,10,20,32} reproduces `1/N` (floors 0.184 / 0.105 / 0.045 / 0.025), so it measures the reference-pool size, not the model |")
-w("| `edm_tikhonov_memorization.ipynb`, U-Net columns | `sigma_max=80`, 500 SDE steps, `exclude_nn=False`, none of which match the locked conventions. Source of the current draft's Table 1 |")
-w("| `edm_unet_train_size_sweep.ipynb` | `sigma_max=80`, superseded by section 5 |")
-w("| `edm_unet_train_size_sweep_sigma_fix.ipynb` | The A/B/C/D sampler ablation. Null, and null by construction: both `sigma_max` values tested sit at 0.05 and 0.55 of `D_min`, that is, the same regime. Superseded by pending experiment 2 |")
-w("| `results/figures/tikvariants_isotropic_vs_covariance.png` | Orphan. No notebook or script on any branch writes this filename. Still shows the floored coarse curve. Was attached to the email |")
-w("| `results/data/sigma_spacing_sweep.pt` | Produced by `src/spectral_reference.py` on the discarded `wip-branch`. That branch **does still exist**, locally and at `origin/wip-branch` (both at `02960b9`, as does `wip-archive`), and it does still contain `src/spectral_reference.py`, so the artifact is in principle reproducible; it is excluded because that branch's src was rejected, not because it is lost. Its *design* is sound and informs pending experiment 2. Note it occupies the exact filename pending experiment 2 will write |")
-w("| `edm_unet_covariance_tikhonov.ipynb` | Never run: 10 cells, 0 outputs, none of its three output files exist. See section 10 |")
-w("| `edm_unet_memorization_mechanism.ipynb` | 0 outputs **and all five of its input artifacts are absent from disk** (`edm_unet_denoiser_gap.pt`, `edm_unet_basin_reconstruction.pt`, `edm_unet_coordconv.pt`, `edm_unet_sigma_fix_ablation.pt`, `gmm_covariance_tikhonov_sweep.pt`), so it renders nothing. The denoiser-gap and basin-reachability results attributed to it trace to `src/scripts/denoiser_gap.py` and `basin_reconstruction.py` plus figures dated 2026-07-24. Needs re-running before citation. This is the most substantive unpublished result in the repo and it currently exists only as three PNGs and three scripts |")
+w("| `notebooks/archived/smallunet/edm_tikhonov_memorization.ipynb`, U-Net columns | `sigma_max=80`, 500 SDE steps, `exclude_nn=False`, none of which match the locked conventions. Source of the current draft's Table 1 |")
+w("| `notebooks/archived/smallunet/edm_unet_train_size_sweep.ipynb` | `sigma_max=80`, superseded by section 5 |")
+w("| `notebooks/archived/smallunet/edm_unet_train_size_sweep_sigma_fix.ipynb` | The A/B/C/D sampler ablation. Null, and null by construction: both `sigma_max` values tested sit at 0.05 and 0.55 of `D_min`, that is, the same regime. Superseded by pending experiment 2 |")
+w("| `results/archived/non_songunet/figures/tikvariants_isotropic_vs_covariance.png` | Orphan. No notebook or script on any branch writes this filename. Still shows the floored coarse curve. Was attached to the email |")
+w("| `results/archived/smallunet/data/sigma_spacing_sweep.pt` | Produced by `src/spectral_reference.py` on the discarded `wip-branch`. That branch **does still exist**, locally and at `origin/wip-branch` (both at `02960b9`, as does `wip-archive`), and it does still contain `src/spectral_reference.py`, so the artifact is in principle reproducible; it is excluded because that branch's src was rejected, not because it is lost. **DO NOT CITE.** |")
+w("| `notebooks/archived/smallunet/edm_unet_covariance_tikhonov.ipynb` | Never run: 10 cells, 0 outputs, none of its three output files exist. See section 10 |")
+w("| `notebooks/archived/smallunet/edm_unet_memorization_mechanism.ipynb` | 0 outputs **and all five of its input artifacts are absent from disk** (`edm_unet_denoiser_gap.pt`, `edm_unet_basin_reconstruction.pt`, `edm_unet_coordconv.pt`, `edm_unet_sigma_fix_ablation.pt`, `gmm_covariance_tikhonov_sweep.pt`), so it renders nothing. The denoiser-gap and basin-reachability results attributed to it trace to `src/scripts/denoiser_gap.py` and `basin_reconstruction.py` plus archived figures dated 2026-07-24. Needs re-running before citation. |")
 w("| `analyze_multiband_memorization_alt_weights.ipynb` | Deliberately a different metric (symmetric ring error, coarse-conditional reference pool, `n_ref=64`, ring step 2.0, NaN-masking). Not drift, but not comparable |")
 w("| `analyze_multiband_memorization.ipynb` | VP diffusion, `n_rand_ref=64`, `exclude_nn=False` at n_train=32, so its coarse 0.026 sits on the 1/32 floor. Its *exact-match* statistics (50 percent of samples reproduce a training field's coarse band, median coarse NN distance 0.0) are floor-free and do survive |")
 w("| `train_vp_sde_on_biased_multiband_data.ipynb`, `train_deepinv_on_biased_multiband_data.ipynb` | Both crashed on a NumPy 1.x/2.x ABI break; committed outputs are stack traces. No results |")
-w("| `results/figures/tikvariants_*.FLOORED-BACKUP.png` (4 files) and `results/data/gmm_tikhonov_variants_sweep.FLOORED-BACKUP.pt` | Deliberate pre-correction backups of the `exclude_nn=False` run, kept for comparison. Superseded by section 4. Never cite; delete once section 4 is in the paper |")
+w("| `results/archived/non_songunet/figures/tikvariants_*.FLOORED-BACKUP.png` (if retained) and `results/data/gmm_tikhonov_variants_sweep.FLOORED-BACKUP.pt` | Deliberate pre-correction backups of the `exclude_nn=False` run, kept for comparison. Superseded by section 4. Never cite; delete once section 4 is in the paper |")
 w()
 w("Twelve `.pt` artifacts referenced by notebooks are not present on disk. `results/data/` is")
 w("gitignored (`.gitignore:42`), so none of them were ever under version control. Affected:")
@@ -816,7 +834,7 @@ w("`edm_unet_covariance_tikhonov.pt`, `multiband_dataset_unbiased_and_biased.pt`
 w("cluster-run Gaussian-field files. Most of the affected notebooks still carry committed cell")
 w("outputs, so their numbers are readable even though they cannot be recomputed without")
 w("retraining. The two that carry neither outputs nor data are")
-w("`edm_unet_memorization_mechanism.ipynb` and `edm_unet_covariance_tikhonov.ipynb`.")
+w("`notebooks/archived/smallunet/edm_unet_memorization_mechanism.ipynb` and `notebooks/archived/smallunet/edm_unet_covariance_tikhonov.ipynb`.")
 w()
 
 # ------------------------------------------------- 10 pending
@@ -824,9 +842,9 @@ w("## 11. Prof. Baptista's three asks: all complete")
 w()
 w("| # | ask, verbatim | notebook | outcome |")
 w("|---|---|---|---|")
-w("| 1 | *\"worth rerunning at batch size 2 to match before concluding there is no memorization\"* | `unet_update_budget_batchsize.ipynb` | **done**, section 7. No memorization at matched update count. The `bs8` comparison arm is a relabelled earlier run, not new work |")
-w("| 2 | *\"the sigma_max/spacing mismatch with the paper is worth matching (or at least testing these spacings) if its easy since it could shift the point the model collapses to\"* | `sigma_spacing_sweep.ipynb` | **done**, section 9. Ruled out across `sigma_max/D_min` 0.05 to 2.73 at both 40 and 1000 steps. Zero collapse in all 12 cells |")
-w("| 3 | *\"hold off on Q3 conclusions until the rerun with multiple seeds\"* | `capacity_multiseed.ipynb` | **done**, section 6. The capacity ordering does **not** survive. A depth effect at matched parameter count does. Also supplied the seed spread the rest of this document now uses |")
+w("| 1 | *\"worth rerunning at batch size 2 to match before concluding there is no memorization\"* | `notebooks/archived/smallunet/unet_update_budget_batchsize.ipynb` | **done**, section 7. No memorization at matched update count. The `bs8` comparison arm is a relabelled earlier run, not new work |")
+w("| 2 | *\"the sigma_max/spacing mismatch with the paper is worth matching (or at least testing these spacings) if its easy since it could shift the point the model collapses to\"* | `notebooks/archived/smallunet/sigma_spacing_sweep.ipynb` | **done**, section 9. Ruled out across `sigma_max/D_min` 0.05 to 2.73 at both 40 and 1000 steps. Zero collapse in all 12 cells |")
+w("| 3 | *\"hold off on Q3 conclusions until the rerun with multiple seeds\"* | `notebooks/archived/smallunet/capacity_multiseed.ipynb` | **done**, section 6. The capacity ordering does **not** survive. A depth effect at matched parameter count does. Also supplied the seed spread the rest of this document now uses |")
 w()
 w("Across sections 5 through 9, no configuration of training budget, batch size, sampler range,")
 w("sampler discretization, parameter count, architecture depth or training-set size produced any")
@@ -834,11 +852,11 @@ w("pixel collapse. The closed-form empirical score gives collapse 1.00 through t
 w("pipeline in every one of those blocks. That is the negative result, and it is threshold-free.")
 w()
 w("What it does not establish is *why*, and no section here should be read as diagnosing a")
-w("mechanism. The diagnostics in `edm_unet_memorization_mechanism.ipynb` are the closest thing")
+w("mechanism. The diagnostics in `notebooks/archived/smallunet/edm_unet_memorization_mechanism.ipynb` are the closest thing")
 w("to an explanation the project has, and they currently have no runnable artifacts (section 10).")
 w()
 w("One item is not from the email but is blocked by these results.")
-w("`edm_unet_covariance_tikhonov.ipynb`, the training-time analogue of Result B, was designed to")
+w("`notebooks/archived/smallunet/edm_unet_covariance_tikhonov.ipynb`, the training-time analogue of Result B, was designed to")
 w("test whether a network trained with the covariance penalty inherits the closed form's")
 w("scale-selectivity. Its stated precondition is a training regime where the *unregularized*")
 w("baseline memorizes. Sections 5 to 9 establish that no such regime was found in any of the")

@@ -1,5 +1,5 @@
 """Per-wavenumber memorization metric, consolidated from the analysis notebooks
-(analyze_coarse_fine_memorization.py / edm_tikhonov_memorization.ipynb /
+(analyze_coarse_fine_memorization.py / archived/smallunet/edm_tikhonov_memorization.ipynb /
 gmm_covariance_tikhonov_memorization.ipynb).
 
 Pipeline: for each generated sample, find its nearest training neighbour in the
