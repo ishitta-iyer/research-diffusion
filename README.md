@@ -72,7 +72,7 @@ notebooks/
 results/
   figures/                    active and retained non-SmallUNet figures
   data/                       ignored active `.pt` artifacts
-  archived/smallunet/         historical SmallUNet figures and local ignored artifacts
+  archived/                   local-only historical results (ignored by Git)
 ```
 
 ## Reproducibility conventions
@@ -104,8 +104,8 @@ under `results/data/`, including `baptista_rectangles_n2/`, `baptista_matern_n2/
 the same repository-relative structure or an explicitly configured result directory; copy their
 completed artifacts back without force-adding them.
 
-Historical SmallUNet notebooks are preserved under `notebooks/archived/smallunet/`, with
-tracked figures and local ignored artifacts under `results/archived/smallunet/`. Historical
+Historical SmallUNet notebooks are preserved under `notebooks/archived/smallunet/`. All
+historical result files under `results/archived/` are local-only and ignored by Git. Historical
 documentation remains available locally, including producer and validity records and the unsafe
 `DO NOT CITE` artifact warning.
 
